@@ -134,6 +134,8 @@ CgmBool CgmF16_is_inf(CgmF16 v) {
 //
 // ===========================================================================
 
+CgmBool CgmVec2_eq(CgmVec2 a, CgmVec2 b) { return a.x == b.x && a.y == b.y; }
+
 CgmVec2 CgmVec2_add(CgmVec2 a, CgmVec2 b) { return CgmVec2_init(a.x + b.x, a.y + b.y); }
 CgmVec2 CgmVec2_sub(CgmVec2 a, CgmVec2 b) { return CgmVec2_init(a.x - b.x, a.y - b.y); }
 CgmVec2 CgmVec2_mul(CgmVec2 a, CgmVec2 b) { return CgmVec2_init(a.x * b.x, a.y * b.y); }
@@ -218,6 +220,8 @@ CgmVec2 CgmVec2_ceil(CgmVec2 v) { return CgmVec2_init(ceilf(v.x), ceilf(v.y)); }
 CgmVec2 CgmVec2_round(CgmVec2 v) { return CgmVec2_init(roundf(v.x), roundf(v.y)); }
 CgmBool CgmVec2_approx_eq(CgmVec2 a, CgmVec2 b) { return cgm_approx_eq(a.x, b.x) && cgm_approx_eq(a.y, b.y); }
 
+
+CgmBool CgmVec3_eq(CgmVec3 a, CgmVec3 b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
 
 CgmVec3 CgmVec3_add(CgmVec3 a, CgmVec3 b) { return CgmVec3_init(a.x + b.x, a.y + b.y, a.z + b.z); }
 CgmVec3 CgmVec3_sub(CgmVec3 a, CgmVec3 b) { return CgmVec3_init(a.x - b.x, a.y - b.y, a.z - b.z); }

@@ -81,12 +81,14 @@ union CgmVec2F16 {
 };
 
 #define CgmVec2_init(x_, y_) ((CgmVec2){ .x = x_, .y = y_ })
+#define CgmVec2_init_even(s) ((CgmVec2){ .x = (s), .y = (s) })
 #define CgmVec2_from_f16(v) (CgmVec2){ CgmF16_to_float((v).x), CgmF16_to_float((v).y) }
 #define CgmVec2_to_f16(v) (CgmVec2F16){ CgmF16_from_float((v).x), CgmF16_from_float((v).y) }
 #define CgmVec2F16_init(x, y) (CgmVec2F16){ CgmF16_from_float(x), CgmF16_from_float(y) }
 #define CgmVec2_zero (CgmVec2){0}
 #define CgmVec2_inf (CgmVec2){INFINITY, INFINITY}
 #define CgmVec2_neg_inf (CgmVec2){-INFINITY, -INFINITY}
+CgmBool CgmVec2_eq(CgmVec2 a, CgmVec2 b);
 CgmVec2 CgmVec2_add(CgmVec2 a, CgmVec2 b);
 CgmVec2 CgmVec2_sub(CgmVec2 a, CgmVec2 b);
 CgmVec2 CgmVec2_mul(CgmVec2 a, CgmVec2 b);
@@ -141,7 +143,9 @@ union CgmVec3 {
 };
 
 #define CgmVec3_init(x_, y_, z_) ((CgmVec3){ .x = x_, .y = y_, .z = z_ })
+#define CgmVec3_init_even(s) ((CgmVec3){ .x = (s), .y = (s), .z = (s) })
 #define CgmVec3_zero (CgmVec3){0}
+CgmBool CgmVec3_eq(CgmVec3 a, CgmVec3 b);
 
 CgmVec3 CgmVec3_add(CgmVec3 a, CgmVec3 b);
 CgmVec3 CgmVec3_sub(CgmVec3 a, CgmVec3 b);
@@ -191,6 +195,7 @@ union CgmVec4 {
 };
 
 #define CgmVec4_init(x_, y_, z_, w_) ((CgmVec4){ .x = x_, .y = y_, .z = z_, .w = w_ })
+#define CgmVec4_init_even(s) ((CgmVec4){ .x = (s), .y = (s), .z = (s), .w = (s) })
 #define CgmVec4_zero (CgmVec4){0}
 
 // ===========================================================================
