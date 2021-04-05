@@ -89,6 +89,7 @@ union CgmVec2F16 {
 #define CgmVec2_inf (CgmVec2){INFINITY, INFINITY}
 #define CgmVec2_neg_inf (CgmVec2){-INFINITY, -INFINITY}
 CgmBool CgmVec2_eq(CgmVec2 a, CgmVec2 b);
+CgmVec2 CgmVec2_copysign(CgmVec2 v, CgmVec2 copy);
 CgmVec2 CgmVec2_add(CgmVec2 a, CgmVec2 b);
 CgmVec2 CgmVec2_sub(CgmVec2 a, CgmVec2 b);
 CgmVec2 CgmVec2_mul(CgmVec2 a, CgmVec2 b);
@@ -146,6 +147,7 @@ union CgmVec3 {
 #define CgmVec3_init_even(s) ((CgmVec3){ .x = (s), .y = (s), .z = (s) })
 #define CgmVec3_zero (CgmVec3){0}
 CgmBool CgmVec3_eq(CgmVec3 a, CgmVec3 b);
+CgmVec3 CgmVec3_copysign(CgmVec3 v, CgmVec3 copy);
 
 CgmVec3 CgmVec3_add(CgmVec3 a, CgmVec3 b);
 CgmVec3 CgmVec3_sub(CgmVec3 a, CgmVec3 b);
@@ -162,7 +164,11 @@ float CgmVec3_len(CgmVec3 v);
 CgmVec3 CgmVec3_norm(CgmVec3 v);
 float CgmVec3_dot(CgmVec3 a, CgmVec3 b);
 CgmVec3 CgmVec3_mul_cross(CgmVec3 a, CgmVec3 b);
+CgmVec3 CgmVec3_reflect(CgmVec3 v, CgmVec3 normal);
+// absorbs all the force in @param(v) that that goes in the opposite direction as @param(normal)
+CgmVec3 CgmVec3_absorb(CgmVec3 v, CgmVec3 normal);
 CgmVec3 CgmVec3_rotate(CgmVec3 point, CgmVec3 rotation_vector, float angle);
+CgmVec3 CgmVec3_clamp_magnitude(CgmVec3 v, float min, float max);
 
 CgmVec3 CgmVec3_perp_left(CgmVec3 v);
 CgmVec3 CgmVec3_perp_right(CgmVec3 v);
@@ -197,6 +203,8 @@ union CgmVec4 {
 #define CgmVec4_init(x_, y_, z_, w_) ((CgmVec4){ .x = x_, .y = y_, .z = z_, .w = w_ })
 #define CgmVec4_init_even(s) ((CgmVec4){ .x = (s), .y = (s), .z = (s), .w = (s) })
 #define CgmVec4_zero (CgmVec4){0}
+CgmBool CgmVec4_eq(CgmVec4 v, CgmVec4 copy);
+CgmVec4 CgmVec4_copysign(CgmVec4 v, CgmVec4 copy);
 
 // ===========================================================================
 //
@@ -357,6 +365,8 @@ float CgmAabb3d_depth(CgmAabb3d* a);
 CgmVec3 CgmAabb3d_size(CgmAabb3d* a);
 CgmVec3 CgmAabb3d_half_size(CgmAabb3d* a);
 CgmVec3 CgmAabb3d_center(CgmAabb3d* a);
+CgmVec3 CgmAabb3d_clamp_pt(CgmAabb3d* a, CgmVec3 pt);
+CgmVec3 CgmAabb3d_closest_pt_on_ray(CgmAabb3d* a, CgmVec3 origin, CgmVec3 direction, float min, float max);
 
 typedef struct CgmSphere CgmSphere;
 struct CgmSphere {
@@ -394,12 +404,14 @@ union CgmTriangle3d {
 };
 
 void CgmTriangle3d_aabb(CgmTriangle3d* triangle, CgmAabb3d* aabb_in_out);
+void CgmTriangle3d_offset(CgmTriangle3d* triangle, CgmVec3 by);
 
 CgmVec3 cgm_line_get_projected_pt(CgmVec3 start, CgmVec3 end, CgmVec3 pt);
 
 typedef struct CgmMesh CgmMesh;
 struct CgmMesh {
 	CgmTriangle3d* triangles;
+	CgmVec3 center_pos;
 	uint32_t triangles_count;
 };
 
@@ -420,34 +432,54 @@ CgmBool cgm_3d_aabb_vs_pt(CgmAabb3d* aabb, CgmVec3 pt, CgmVec3* contact_normal_o
 CgmBool cgm_3d_aabb_vs_aabb(CgmAabb3d* a, CgmAabb3d* b, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_aabb_vs_sphere(CgmAabb3d* aabb, CgmSphere* sphere, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_aabb_vs_capsule(CgmAabb3d* aabb, CgmCapsule3d* capsule, CgmVec3* contact_normal_out, float* contact_distance_out);
-CgmBool cgm_3d_aabb_vs_triangle(CgmAabb3d* aabb, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_aabb_vs_triangle(CgmAabb3d* aabb, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side);
+CgmBool cgm_3d_aabb_vs_single_side_triangle(CgmAabb3d* aabb, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_aabb_vs_double_side_triangle(CgmAabb3d* aabb, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_aabb_vs_mesh(CgmAabb3d* aabb, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out);
 
 CgmBool cgm_3d_sphere_vs_pt(CgmSphere* sphere, CgmVec3 pt, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_sphere_vs_sphere(CgmSphere* a, CgmSphere* b, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_sphere_vs_aabb(CgmSphere* sphere, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_sphere_vs_capsule(CgmSphere* sphere, CgmCapsule3d* capsule, CgmVec3* contact_normal_out, float* contact_distance_out);
-CgmBool cgm_3d_sphere_vs_triangle(CgmSphere* sphere, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_sphere_vs_triangle(CgmSphere* sphere, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side);
+CgmBool cgm_3d_sphere_vs_single_side_triangle(CgmSphere* sphere, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_sphere_vs_double_side_triangle(CgmSphere* sphere, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_sphere_vs_mesh(CgmSphere* sphere, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out);
 
 CgmBool cgm_3d_capsule_vs_pt(CgmCapsule3d* capsule, CgmVec3 pt, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_capsule_vs_capsule(CgmCapsule3d* a, CgmCapsule3d* b, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_capsule_vs_aabb(CgmCapsule3d* capsule, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_capsule_vs_sphere(CgmCapsule3d* capsule, CgmSphere* sphere, CgmVec3* contact_normal_out, float* contact_distance_out);
-CgmBool cgm_3d_capsule_vs_triangle(CgmCapsule3d* capsule, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_capsule_vs_triangle(CgmCapsule3d* capsule, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side);
+CgmBool cgm_3d_capsule_vs_single_side_triangle(CgmCapsule3d* capsule, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_capsule_vs_double_side_triangle(CgmCapsule3d* capsule, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_capsule_vs_mesh(CgmCapsule3d* capsule, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out);
 
-CgmBool cgm_3d_triangle_vs_sphere(CgmTriangle3d* triangle, CgmSphere* sphere, CgmVec3* contact_normal_out, float* contact_distance_out);
-CgmBool cgm_3d_triangle_vs_capsule(CgmTriangle3d* triangle, CgmCapsule3d* capsule, CgmVec3* contact_normal_out, float* contact_distance_out);
-CgmBool cgm_3d_triangle_vs_aabb(CgmTriangle3d* triangle, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out);
-CgmBool cgm_3d_triangle_vs_triangle(CgmTriangle3d* a, CgmTriangle3d* b, CgmVec3* contact_normal_out, float* contact_distance_out);
-CgmBool cgm_3d_triangle_vs_mesh(CgmTriangle3d* a, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_triangle_vs_aabb(CgmTriangle3d* triangle, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side);
+CgmBool cgm_3d_triangle_vs_sphere(CgmTriangle3d* triangle, CgmSphere* sphere, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side);
+CgmBool cgm_3d_triangle_vs_capsule(CgmTriangle3d* triangle, CgmCapsule3d* capsule, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side);
+CgmBool cgm_3d_triangle_vs_triangle(CgmTriangle3d* a, CgmTriangle3d* b, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side_a, CgmBool triangle_single_side_b);
+CgmBool cgm_3d_triangle_vs_mesh(CgmTriangle3d* triangle, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side);
+
+CgmBool cgm_3d_single_side_triangle_vs_aabb(CgmTriangle3d* triangle, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_single_side_triangle_vs_sphere(CgmTriangle3d* triangle, CgmSphere* sphere, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_single_side_triangle_vs_capsule(CgmTriangle3d* triangle, CgmCapsule3d* capsule, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_single_side_triangle_vs_single_side_triangle(CgmTriangle3d* a, CgmTriangle3d* b, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_single_side_triangle_vs_double_side_triangle(CgmTriangle3d* a, CgmTriangle3d* b, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_single_side_triangle_vs_mesh(CgmTriangle3d* triangle, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out);
+
+CgmBool cgm_3d_double_side_triangle_vs_aabb(CgmTriangle3d* triangle, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_double_side_triangle_vs_sphere(CgmTriangle3d* triangle, CgmSphere* sphere, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_double_side_triangle_vs_capsule(CgmTriangle3d* triangle, CgmCapsule3d* capsule, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_double_side_triangle_vs_triangle(CgmTriangle3d* a, CgmTriangle3d* b, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_double_side_triangle_vs_mesh(CgmTriangle3d* triangle, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out);
 
 CgmBool cgm_3d_mesh_vs_aabb(CgmMesh* mesh, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_mesh_vs_sphere(CgmMesh* mesh, CgmSphere* sphere, CgmVec3* contact_normal_out, float* contact_distance_out);
 CgmBool cgm_3d_mesh_vs_capsule(CgmMesh* mesh, CgmCapsule3d* capsule, CgmVec3* contact_normal_out, float* contact_distance_out);
-CgmBool cgm_3d_mesh_vs_triangle(CgmMesh* mesh, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
-CgmBool cgm_3d_mesh_vs_mesh(CgmMesh* a, CgmMesh* b, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_mesh_vs_triangle(CgmMesh* mesh, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side);
+CgmBool cgm_3d_mesh_vs_single_side_triangle(CgmMesh* mesh, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
+CgmBool cgm_3d_mesh_vs_double_side_triangle(CgmMesh* mesh, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out);
 
 #endif // CGM_H
 
