@@ -357,8 +357,8 @@ union CgmAabb3d {
 	};
 };
 
-#define CgmAabb3d_init(x_, y_, z_, ex_, ey_, ez_) ((CgmAabb3d) { .x = x_, .y = y_, .z = z_, .ex = ex_, .ey = ey_, .ez = ez_ })
-#define CgmAabb3d_init_min_max(min_, max_) ((CgmAabb3d) { .min = min_, .max = max_ })
+#define CgmAabb3d_init(x_, y_, z_, ex_, ey_, ez_) ((CgmAabb3d) { .x = (x_), .y = (y_), .z = (z_), .ex = (ex_), .ey = (ey_), .ez = (ez_) })
+#define CgmAabb3d_init_min_max(min_, max_) ((CgmAabb3d) { .min = (min_), .max = (max_) })
 float CgmAabb3d_width(CgmAabb3d* a);
 float CgmAabb3d_height(CgmAabb3d* a);
 float CgmAabb3d_depth(CgmAabb3d* a);

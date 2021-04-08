@@ -42,7 +42,7 @@ float cgm_round_up_to_multiple(float v, float multiple) {
 	if (v > 0.0) {
 		return v + multiple - rem;
 	} else {
-		return v + rem;
+		return v - rem;
 	}
 }
 
