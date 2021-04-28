@@ -2,6 +2,8 @@
 #include "cgm.h"
 #endif
 
+#include <string.h>
+
 // ===========================================================================
 //
 //
@@ -15,6 +17,34 @@ float cgm_max(float a, float b) { return a > b ? a : b; }
 float cgm_clamp(float v, float min, float max) { return v > max ? max : (v >= min ? v : min); }
 float cgm_lerp(float from, float to, float t) { return (to - from) * t + from; }
 float cgm_lerp_inv(float from, float to, float value) { return (value - from) / (to - from); }
+float cgm_cubic_bezier_curve_interp_1d(CgmVec2 start_anchor, CgmVec2 end_anchor, float ratio) {
+	CgmVec2 pts[] = {
+		CgmVec2_init(0.f, 0.f),
+		start_anchor,
+		end_anchor,
+		CgmVec2_init(1.f, 1.f),
+	};
+	CgmVec2 pt = cgm_cubic_bezier_curve_interp_2d(pts, ratio);
+	CgmVec2 vec = CgmVec2_init(0.0f, 1.f);
+	return CgmVec2_dot(pt, vec);
+}
+
+CgmVec2 cgm_cubic_bezier_curve_interp_2d(CgmVec2 points[4], float ratio) {
+	CgmVec2 tmp_buf[4];
+	memcpy(tmp_buf, points, sizeof(CgmVec2) * 4);
+
+	size_t number_of_points = 4;
+	while (number_of_points > 1) {
+		for (size_t i = 0; i < number_of_points - 1; ++i) {
+			tmp_buf[i].x = cgm_lerp(tmp_buf[i].x, tmp_buf[i + 1].x, ratio);
+			tmp_buf[i].y = cgm_lerp(tmp_buf[i].y, tmp_buf[i + 1].y, ratio);
+
+		}
+		number_of_points -= 1;
+	}
+
+	return tmp_buf[0];
+}
 float cgm_remap(float from_value, float from_min, float from_max, float to_min, float to_max) {
 	float t = cgm_lerp_inv(from_min, from_max, from_value);
 	return cgm_lerp(to_min, to_max, t);
@@ -549,6 +579,22 @@ void CgmMat4x4_mul(CgmMat4x4* out, CgmMat4x4* a, CgmMat4x4* b) {
 	);
 }
 
+CgmVec3 CgmMat4x4_mul_point(CgmMat4x4* m, CgmVec3 pt) {
+	return CgmVec3_init(
+		(pt.x * m->row[0].x) + (pt.y * m->row[1].x) + (pt.z * m->row[2].x) + m->row[3].x,
+		(pt.x * m->row[0].y) + (pt.y * m->row[1].y) + (pt.z * m->row[2].y) + m->row[3].y,
+		(pt.x * m->row[0].z) + (pt.y * m->row[1].z) + (pt.z * m->row[2].z) + m->row[3].z
+	);
+}
+
+CgmVec3 CgmMat4x4_mul_vector(CgmMat4x4* m, CgmVec3 v) {
+	return CgmVec3_init(
+		(v.x * m->row[0].x) + (v.y * m->row[1].x) + (v.z * m->row[2].x),
+		(v.x * m->row[0].y) + (v.y * m->row[1].y) + (v.z * m->row[2].y),
+		(v.x * m->row[0].z) + (v.y * m->row[1].z) + (v.z * m->row[2].z)
+	);
+}
+
 // ===========================================================================
 //
 //
@@ -691,6 +737,13 @@ CgmBool cgm_2d_aabb_vs_pt(CgmAabb2d* a, CgmVec2 pt, CgmVec2* contact_normal_out,
 //
 // ===========================================================================
 
+CgmVec3 CgmRay3d_get_projected_pt(CgmRay3d* ray, float ray_max_contact_distance, CgmVec3 pt) {
+	CgmVec3 vec_to_pt = CgmVec3_sub(pt, ray->pos);
+	float offset = CgmVec3_dot(ray->dir, vec_to_pt);
+	offset = cgm_clamp(offset, 0.f, ray_max_contact_distance);
+	return CgmVec3_add(ray->pos, CgmVec3_mul_scalar(ray->dir, offset));
+}
+
 float CgmAabb3d_width(CgmAabb3d* a) { return a->ex - a->x; }
 float CgmAabb3d_height(CgmAabb3d* a) { return a->ey - a->y; }
 float CgmAabb3d_depth(CgmAabb3d* a) { return a->ez - a->z; }
@@ -698,6 +751,37 @@ CgmVec3 CgmAabb3d_size(CgmAabb3d* a) { return CgmVec3_init(a->ex - a->x, a->ey -
 CgmVec3 CgmAabb3d_half_size(CgmAabb3d* a) { return CgmVec3_mul_scalar(CgmAabb3d_size(a), 0.5f); }
 CgmVec3 CgmAabb3d_center(CgmAabb3d* a) { return CgmVec3_add(a->min, CgmVec3_mul_scalar(CgmAabb3d_size(a), 0.5f)); }
 CgmVec3 CgmAabb3d_clamp_pt(CgmAabb3d* a, CgmVec3 pt) { return CgmVec3_clamp(pt, a->min, a->max); }
+
+CgmVec3 CgmAabb3d_closest_pt(CgmAabb3d* a, CgmVec3 pt) {
+	if (cgm_3d_aabb_vs_pt(a, pt, NULL, NULL)) {
+		//
+		// determine the closest edge to get the normal and distance from that edge.
+		//
+		CgmVec3 vec_to_pt = CgmVec3_sub(pt, CgmAabb3d_center(a));
+		CgmVec3 vec_to_pt_abs = CgmVec3_abs(vec_to_pt);
+		CgmVec3 half_size = CgmAabb3d_half_size(a);
+		CgmVec3 diff = CgmVec3_sub(half_size, vec_to_pt_abs);
+
+		CgmVec3 normal;
+		float distance_to_edge;
+		if (diff.x < diff.y && diff.x < diff.z) {
+			normal = CgmVec3_init(copysignf(1.f, -vec_to_pt.x), 0.f, 0.f);
+			distance_to_edge = diff.x;
+		} else if (diff.y < diff.x && diff.y < diff.z) {
+			normal = CgmVec3_init(0.f, copysignf(1.f, -vec_to_pt.y), 0.f);
+			distance_to_edge = diff.y;
+		} else {
+			normal = CgmVec3_init(0.f, 0.f, copysignf(1.f, -vec_to_pt.z));
+			distance_to_edge = diff.z;
+		}
+
+		// now add the distance to bring the point to the closest face
+		return CgmVec3_add(pt, CgmVec3_mul_scalar(normal, distance_to_edge));
+	} else {
+		return CgmAabb3d_clamp_pt(a, pt);
+	}
+}
+
 CgmVec3 CgmAabb3d_closest_pt_on_ray(CgmAabb3d* a, CgmVec3 origin, CgmVec3 direction, float min, float max) {
 	CgmVec3 vertices[] = {
 		CgmVec3_init(a->x,   a->y,  a->z),
@@ -729,6 +813,34 @@ CgmVec3 CgmAabb3d_closest_pt_on_ray(CgmAabb3d* a, CgmVec3 origin, CgmVec3 direct
 	return closest_pt;
 }
 
+CgmVec3 CgmAabb3d_closest_pt_along_ray(CgmAabb3d* a, CgmVec3 origin, CgmVec3 direction, float min, float max) {
+	CgmVec3 vertices[] = {
+		CgmVec3_init(a->x,   a->y,  a->z),
+		CgmVec3_init(a->ex,  a->y,  a->z),
+		CgmVec3_init(a->x,  a->ey,  a->z),
+		CgmVec3_init(a->x,   a->y, a->ez),
+		CgmVec3_init(a->ex, a->ey,  a->z),
+		CgmVec3_init(a->x,  a->ey, a->ez),
+		CgmVec3_init(a->ex,  a->y, a->ez),
+		CgmVec3_init(a->ex, a->ey, a->ez),
+	};
+
+	float min_distance = INFINITY;
+	CgmVec3 closest_pt;
+	for (uint32_t i = 0; i < 8; i += 1) {
+		CgmVec3 vertex = vertices[i];
+		CgmVec3 vec_to_vertex = CgmVec3_sub(vertex, origin);
+		float offset_to_perp_pt = CgmVec3_dot(vec_to_vertex, direction);
+		offset_to_perp_pt = cgm_clamp(offset_to_perp_pt, min, max);
+		if (offset_to_perp_pt < min_distance) {
+			closest_pt = CgmVec3_add(origin, CgmVec3_mul_scalar(direction, offset_to_perp_pt));
+			min_distance = offset_to_perp_pt;
+		}
+	}
+
+	return closest_pt;
+}
+
 void CgmSphere_aabb(CgmSphere* sphere, CgmAabb3d* aabb_in_out) {
 	CgmVec3 min = CgmVec3_sub_scalar(sphere->center_pos, sphere->radius);
 	CgmVec3 max = CgmVec3_add_scalar(sphere->center_pos, sphere->radius);
@@ -741,10 +853,12 @@ void CgmCapsule3d_aabb(CgmCapsule3d* capsule, CgmAabb3d* aabb_in_out) {
 	CgmVec3 start = CgmVec3_add(capsule->center_pos, offset);
 	CgmVec3 end = CgmVec3_add(capsule->center_pos, CgmVec3_neg(offset));
 
-	CgmSphere sphere_start = { .radius = capsule->radius, .center_pos = start };
-	CgmSphere sphere_end = { .radius = capsule->radius, .center_pos = end };
-	CgmSphere_aabb(&sphere_start, aabb_in_out);
-	CgmSphere_aabb(&sphere_end, aabb_in_out);
+	CgmVec3 start_min = CgmVec3_sub_scalar(start, capsule->radius);
+	CgmVec3 start_max = CgmVec3_add_scalar(start, capsule->radius);
+	CgmVec3 end_min = CgmVec3_sub_scalar(end, capsule->radius);
+	CgmVec3 end_max = CgmVec3_add_scalar(end, capsule->radius);
+	aabb_in_out->min = CgmVec3_min(start_min, end_min);
+	aabb_in_out->max = CgmVec3_max(start_max, end_max);
 }
 
 CgmVec3 CgmCapsule3d_get_projected_pt(CgmCapsule3d* capsule, CgmVec3 pt) {
@@ -775,6 +889,43 @@ CgmVec3 cgm_line_get_projected_pt(CgmVec3 start, CgmVec3 end, CgmVec3 pt) {
 	return CgmVec3_add(start, CgmVec3_mul_scalar(vec, cgm_clamp(t, 0.f, 1.f)));
 }
 
+CgmVec3 CgmHoop3d_closest_pt(CgmHoop3d* hoop, CgmVec3 pt) {
+	CgmVec3 hoop_center_to_pt_vec = CgmVec3_sub(pt, hoop->center_pos);
+
+	CgmVec3 up_vec = CgmVec3_mul_scalar(hoop->up, CgmVec3_dot(hoop->up, hoop_center_to_pt_vec));
+	CgmVec3 right_vec = CgmVec3_mul_scalar(hoop->right, CgmVec3_dot(hoop->right, hoop_center_to_pt_vec));
+	CgmVec3 inner_vec_norm = CgmVec3_norm(CgmVec3_add(up_vec, right_vec));
+
+	float radius_to_nearest_pt = hoop->inner_radius + hoop->rim_radius;
+	CgmVec3 vec_to_closest_pt_on_hoop = CgmVec3_mul_scalar(inner_vec_norm, radius_to_nearest_pt);
+	return CgmVec3_add(hoop->center_pos, vec_to_closest_pt_on_hoop);
+}
+
+void CgmHoop3d_aabb(CgmHoop3d* hoop, CgmAabb3d* aabb_in_out) {
+	float radius_to_end_of_hoop = hoop->inner_radius + hoop->rim_radius * 2.f;
+
+	CgmVec3 up_offset = CgmVec3_mul_scalar(hoop->up, radius_to_end_of_hoop);
+	CgmVec3 up_start = CgmVec3_add(hoop->center_pos, up_offset);
+	CgmVec3 up_end = CgmVec3_add(hoop->center_pos, CgmVec3_neg(up_offset));
+	CgmVec3 up_min = CgmVec3_min(up_start, up_end);
+	CgmVec3 up_max = CgmVec3_max(up_start, up_end);
+
+	CgmVec3 right_offset = CgmVec3_mul_scalar(hoop->right, radius_to_end_of_hoop);
+	CgmVec3 right_start = CgmVec3_add(hoop->center_pos, right_offset);
+	CgmVec3 right_end = CgmVec3_add(hoop->center_pos, CgmVec3_neg(right_offset));
+	CgmVec3 right_min = CgmVec3_min(right_start, right_end);
+	CgmVec3 right_max = CgmVec3_max(right_start, right_end);
+
+	CgmVec3 hoop_face_normal = CgmVec3_norm(CgmVec3_mul_cross(hoop->up, hoop->right));
+	CgmVec3 normal_offset = CgmVec3_mul_scalar(hoop_face_normal, hoop->rim_radius);
+	CgmVec3 normal_start = CgmVec3_add(hoop->center_pos, normal_offset);
+	CgmVec3 normal_end = CgmVec3_add(hoop->center_pos, CgmVec3_neg(normal_offset));
+	CgmVec3 normal_min = CgmVec3_min(normal_start, normal_end);
+	CgmVec3 normal_max = CgmVec3_max(normal_start, normal_end);
+
+	aabb_in_out->min = CgmVec3_min(CgmVec3_min(up_min, right_min), normal_min);
+	aabb_in_out->max = CgmVec3_max(CgmVec3_max(up_max, right_max), normal_max);
+}
 
 // ===========================================================================
 //
@@ -839,6 +990,274 @@ CgmBool cgm_3d_pt_vs_capsule(CgmVec3 pt, CgmCapsule3d* capsule, CgmVec3* contact
 
 	CgmSphere sphere = { .radius = capsule->radius, .center_pos = projected_pt };
 	return cgm_3d_pt_vs_sphere(pt, &sphere, contact_normal_out, contact_distance_out);
+}
+
+CgmBool cgm_3d_ray_vs_aabb(CgmRay3d* r, float r_max_distance, CgmAabb3d* a, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	float tx1 = (a->x - r->pos.x) / r->dir.x;
+	float tx2 = (a->ex - r->pos.x) / r->dir.x;
+	float tmin_x = cgm_min(tx1, tx2);
+	float tmax_x = cgm_max(tx1, tx2);
+
+	float ty1 = (a->y - r->pos.y) / r->dir.y;
+	float ty2 = (a->ey - r->pos.y) / r->dir.y;
+	float tmin_y = cgm_min(ty1, ty2);
+	float tmax_y = cgm_max(ty1, ty2);
+
+	float tz1 = (a->z - r->pos.z) / r->dir.z;
+	float tz2 = (a->ez - r->pos.z) / r->dir.z;
+	float tmin_z = cgm_min(tz1, tz2);
+	float tmax_z = cgm_max(tz1, tz2);
+
+	float tmin = cgm_max(tmin_x, cgm_max(tmin_y, tmin_z));
+	float tmax = cgm_min(tmax_x, cgm_min(tmax_y, tmax_z));
+
+	if (tmax > 0.f && tmax >= tmin && tmin <= r_max_distance) {
+		if (contact_normal_out) {
+			if (tmin_x > tmin_y && tmin_x > tmin_z) {
+				*contact_normal_out = CgmVec3_init(-copysignf(1.0, r->dir.x), 0.f, 0.f);
+			} else if (tmin_y > tmin_x && tmin_y > tmin_z) {
+				*contact_normal_out = CgmVec3_init(0.0, -copysignf(1.0, r->dir.y), 0.f);
+			} else {
+				*contact_normal_out = CgmVec3_init(0.0, 0.f, -copysignf(1.0, r->dir.z));
+			}
+		}
+
+		if (contact_distance_out) {
+			*contact_distance_out = tmin;
+		}
+		return cgm_true;
+	}
+
+	return cgm_false;
+}
+
+CgmBool cgm_3d_ray_vs_sphere(CgmRay3d* ray, float ray_max_contact_distance, CgmSphere* sphere, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmVec3 ray_to_sphere_vec = CgmVec3_sub(sphere->center_pos, ray->pos);  // this is the vector from ray->pos to sphere->center_pos
+	float ray_to_sphere_vec_squared_distance = CgmVec3_dot(ray_to_sphere_vec, ray_to_sphere_vec);
+	float sphere_radius_squared = sphere->radius * sphere->radius;
+	if (CgmVec3_dot(ray_to_sphere_vec, ray->dir) < 0) { // the sphere is behind the origin ray->pos
+		if (ray_to_sphere_vec_squared_distance > sphere_radius_squared) {
+			// ray is outside of the sphere
+			return cgm_false;
+		} else if (ray_to_sphere_vec_squared_distance == sphere_radius_squared) {
+			if (contact_distance_out) *contact_distance_out = 0.f;
+			if (contact_normal_out) *contact_normal_out = CgmVec3_norm(CgmVec3_sub(ray->pos, sphere->center_pos));
+		} else {
+			// occurs when ray->pos is inside the sphere
+			if (isinf(ray_max_contact_distance) && !contact_normal_out && !contact_distance_out)
+				return cgm_true;
+
+			CgmVec3 closest_pt_on_ray = CgmRay3d_get_projected_pt(ray, ray_max_contact_distance, sphere->center_pos);
+			CgmVec3 vec_sphere_to_closest_pt_on_ray = CgmVec3_sub(closest_pt_on_ray, sphere->center_pos);
+			float vec_sphere_to_closest_pt_on_ray_squared_distance = CgmVec3_dot(vec_sphere_to_closest_pt_on_ray, vec_sphere_to_closest_pt_on_ray);
+			// distance to the closest hit on the sphere
+			float distance_to_closest_hit = sqrtf(sphere_radius_squared - vec_sphere_to_closest_pt_on_ray_squared_distance);
+			CgmVec3 vec_ray_to_closest_pt_on_ray = CgmVec3_sub(closest_pt_on_ray, ray->pos);
+			distance_to_closest_hit -= CgmVec3_len(vec_ray_to_closest_pt_on_ray);
+			if (distance_to_closest_hit > ray_max_contact_distance)
+				return cgm_false;
+
+			if (contact_distance_out) *contact_distance_out = distance_to_closest_hit;
+			if (contact_normal_out) *contact_normal_out = CgmVec3_norm(CgmVec3_sub(CgmVec3_add(ray->pos, CgmVec3_mul_scalar(ray->dir, distance_to_closest_hit)), sphere->center_pos));
+		}
+	} else {
+		CgmVec3 closest_pt_on_ray = CgmRay3d_get_projected_pt(ray, ray_max_contact_distance, sphere->center_pos);
+		CgmVec3 vec_sphere_to_closest_pt = CgmVec3_sub(closest_pt_on_ray, sphere->center_pos);
+		float vec_sphere_to_closest_pt_squared_distance = CgmVec3_dot(vec_sphere_to_closest_pt, vec_sphere_to_closest_pt);
+		if (vec_sphere_to_closest_pt_squared_distance > sphere_radius_squared)
+			return cgm_false;
+
+		if (isinf(ray_max_contact_distance) && !contact_normal_out && !contact_distance_out)
+			return cgm_true;
+
+		float distance_to_closest_hit_closest_pt_on_ray = sqrtf(sphere_radius_squared - vec_sphere_to_closest_pt_squared_distance);
+		CgmVec3 vec_ray_to_closest_pt = CgmVec3_sub(closest_pt_on_ray, ray->pos);
+		float vec_ray_to_closest_pt_squared_distance = CgmVec3_dot(vec_ray_to_closest_pt, vec_ray_to_closest_pt);
+
+		float distance_to_closest_hit = sqrtf(vec_ray_to_closest_pt_squared_distance);
+		if (ray_to_sphere_vec_squared_distance > sphere_radius_squared)
+			distance_to_closest_hit -= distance_to_closest_hit_closest_pt_on_ray;
+		else
+			distance_to_closest_hit += distance_to_closest_hit_closest_pt_on_ray;
+
+		if (distance_to_closest_hit > ray_max_contact_distance)
+			return cgm_false;
+
+		if (contact_distance_out) *contact_distance_out = distance_to_closest_hit;
+		if (contact_normal_out) *contact_normal_out = CgmVec3_norm(CgmVec3_sub(CgmVec3_add(ray->pos, CgmVec3_mul_scalar(ray->dir, distance_to_closest_hit)), sphere->center_pos));
+
+		return cgm_true;
+	}
+	return cgm_true;
+}
+
+CgmBool cgm_3d_ray_vs_capsule(CgmRay3d* ray, float ray_max_contact_distance, CgmCapsule3d* capsule, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmVec3 closest_pt_on_ray = CgmRay3d_get_projected_pt(ray, ray_max_contact_distance, capsule->center_pos);
+	CgmVec3 closest_pt_on_capsule = CgmCapsule3d_get_projected_pt(capsule, closest_pt_on_ray);
+	CgmSphere sphere = (CgmSphere) { .center_pos = closest_pt_on_capsule, .radius = capsule->radius };
+	return cgm_3d_ray_vs_sphere(ray, ray_max_contact_distance, &sphere, contact_normal_out, contact_distance_out);
+}
+
+CgmBool cgm_3d_ray_vs_triangle(CgmRay3d* ray, float ray_max_contact_distance, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side) {
+	CgmVec3 triangle_rel_pts[3] = {
+		CgmVec3_sub(triangle->a, ray->pos),
+		CgmVec3_sub(triangle->b, ray->pos),
+		CgmVec3_sub(triangle->c, ray->pos),
+	};
+
+	printf("triangle->a = %f, %f, %f\n", triangle->a.x, triangle->a.y, triangle->a.z);
+	printf("triangle->b = %f, %f, %f\n", triangle->b.x, triangle->b.y, triangle->b.z);
+	printf("triangle->c = %f, %f, %f\n", triangle->c.x, triangle->a.y, triangle->c.z);
+
+	//
+	// all combinations of the edges from both shapes paired together.
+	// we will use the cross product on these pairs to get the
+	// separation axis
+	CgmVec3 edge_axises[][2] = {
+		{ CgmVec3_sub(triangle->b, triangle->a), ray->dir },
+		{ CgmVec3_sub(triangle->c, triangle->b), ray->dir },
+		{ CgmVec3_sub(triangle->a, triangle->c), ray->dir },
+	};
+
+	CgmVec3 triangle_face_normal = CgmVec3_norm(CgmVec3_mul_cross(edge_axises[0][0], edge_axises[0][1]));
+	CgmVec3 face_axises[2] = {
+		triangle_face_normal,
+		ray->dir,
+	};
+
+	//
+	// when using single side triangles, it can only collide
+	// when the triangle face normal and the ray direction
+	// are going the opposite way.
+	if (triangle_single_side) {
+		float d = CgmVec3_dot(ray->dir, triangle_face_normal);
+		if (d > 0.f) {
+			printf("\n");
+			return cgm_false;
+		}
+	}
+
+	CgmVec3 ray_max_contact_distance_pt = CgmVec3_mul_scalar(ray->dir, ray_max_contact_distance);
+
+	CgmVec3 min_axis;
+	float min_axis_distance = INFINITY;
+	for (uint32_t i = 0; i < 5; i += 1) {
+		CgmVec3 axis;
+		if (i < 3) {
+			axis = edge_axises[i][0];
+			CgmVec3 separation_axis = CgmVec3_mul_cross(axis, edge_axises[i][1]);
+			float squared_distance = CgmVec3_dot(separation_axis, separation_axis);
+			// if the two axis we just cross product together are parallel, we can skip these.
+			// this is only because we test the ray direction axis
+			if (cgm_approx_eq(squared_distance, 0.f)) continue;
+			axis = CgmVec3_norm(separation_axis);
+		} else {
+			axis = face_axises[i - 3];
+		}
+
+		float axis_ray_dir_dot = CgmVec3_dot(ray->dir, axis);
+
+		float ray_max_contact_distance_p = CgmVec3_dot(ray_max_contact_distance_pt, axis);
+
+		//
+		// perpendicular axis mean that the max contact distance does not matter.
+		// set it to zero just incase it is set to infinity.
+		if (axis_ray_dir_dot == 0.f)
+			ray_max_contact_distance_p = 0.f;
+
+		// project all 3 vertices of the triangle onto the separation axis
+		float triangle_p0 = CgmVec3_dot(triangle_rel_pts[0], axis);
+		float triangle_p1 = CgmVec3_dot(triangle_rel_pts[1], axis);
+		float triangle_p2 = CgmVec3_dot(triangle_rel_pts[2], axis);
+		float triangle_min = cgm_min(cgm_min(triangle_p0, triangle_p1), triangle_p2);
+		float triangle_max = cgm_max(cgm_max(triangle_p0, triangle_p1), triangle_p2);
+
+		printf("axis = %f, %f, %f\n", axis.x, axis.y, axis.z);
+		printf("axis_ray_dir_dot = %f\n", axis_ray_dir_dot);
+		printf("triangle_min = %f\n", triangle_min);
+		printf("triangle_max = %f\n", triangle_max);
+
+		if (axis_ray_dir_dot > 0.f && triangle_max < 0.f) {
+			// triangle is behind us so bail
+		printf("\n");
+			return cgm_false;
+		}
+
+		float t = cgm_max(-triangle_max, triangle_min);
+		printf("t = %f\n", t);
+		printf("ray_max_contact_distance_p = %f\n", ray_max_contact_distance_p);
+		if (t > ray_max_contact_distance_p) {
+			// we have found a seperation along this axis with the ray.
+		printf("\n");
+			return cgm_false;
+		}
+
+		//
+		// we do not want to store a min travel distance when using an
+		// separation axis that is perpendicular. a perpendicular axis
+		// means that the ray will be projected in the same place every time.
+		if (cgm_approx_eq(axis_ray_dir_dot, 0.f))
+			continue;
+
+		//
+		// do not use if the ray is inside triangle
+		if (triangle_min < 0.f && triangle_max > 0.f)
+			continue;
+
+		float distance = triangle_min;
+		CgmVec3 separate_vec = CgmVec3_mul_scalar(axis, -distance);
+		float offset_along_sphere_dir = CgmVec3_dot(ray->dir, separate_vec);
+		if (offset_along_sphere_dir < 0.f)
+			continue;
+
+		if (offset_along_sphere_dir < min_axis_distance) {
+			//
+			// we have found a axis with the new min travel distance of the ray.
+			min_axis_distance = distance;
+			min_axis = axis;
+		}
+	}
+
+			printf("\n");
+	//
+	// we have made it this far so we have a collision.
+	if (contact_normal_out) *contact_normal_out = min_axis;
+	if (contact_distance_out) *contact_distance_out = min_axis_distance;
+	return cgm_true;
+}
+
+CgmBool cgm_3d_ray_vs_single_side_triangle(CgmRay3d* ray, float ray_max_contact_distance, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	return cgm_3d_ray_vs_triangle(ray, ray_max_contact_distance, triangle, contact_normal_out, contact_distance_out, cgm_true);
+}
+
+CgmBool cgm_3d_ray_vs_double_side_triangle(CgmRay3d* ray, float ray_max_contact_distance, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	return cgm_3d_ray_vs_triangle(ray, ray_max_contact_distance, triangle, contact_normal_out, contact_distance_out, cgm_false);
+}
+
+CgmBool cgm_3d_ray_vs_mesh(CgmRay3d* ray, float ray_max_contact_distance, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmTriangle3d triangle;
+	CgmVec3 best_contact_normal;
+	float min_contact_distance = INFINITY;
+	CgmVec3 contact_normal;
+	float contact_distance;
+	for (uint32_t i = 0; i < mesh->triangles_count; i += 1) {
+		triangle = mesh->triangles[i];
+		CgmTriangle3d_offset(&triangle, mesh->center_pos);
+		if (cgm_3d_ray_vs_triangle(ray, ray_max_contact_distance, &triangle, &contact_normal, &contact_distance, cgm_true)) {
+			if (!contact_normal_out && !contact_distance_out) return cgm_true;
+
+			if (contact_distance < min_contact_distance) {
+				min_contact_distance = contact_distance;
+				best_contact_normal = contact_normal;
+			}
+		}
+	}
+
+	if (isinf(min_contact_distance)) return cgm_false;
+
+	if (contact_normal_out) *contact_normal_out = best_contact_normal;
+	if (contact_distance_out) *contact_distance_out = contact_distance;
+	return cgm_true;
 }
 
 CgmBool cgm_3d_aabb_vs_pt(CgmAabb3d* aabb, CgmVec3 pt, CgmVec3* contact_normal_out, float* contact_distance_out) {
@@ -913,6 +1332,136 @@ CgmBool cgm_3d_aabb_vs_sphere(CgmAabb3d* aabb, CgmSphere* sphere, CgmVec3* conta
 		}
 	}
 	return cgm_false;
+}
+
+CgmBool cgm_3d_aabb_vs_swept_sphere(CgmAabb3d* aabb, CgmSphere* sphere, CgmVec3 sphere_dir, float sphere_max_contact_distance, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	if (isinf(sphere_max_contact_distance)) {
+		fprintf(stderr, "sphere_max_contact_distance must be a finite value");
+		abort();
+	}
+	CgmVec3 aabb_center = CgmAabb3d_center(aabb);
+	CgmVec3 aabb_half_size = CgmAabb3d_half_size(aabb);
+
+	// translate the capsule into relative space from the AABB center.
+	// and the start and end in relative space as well.
+	CgmVec3 sphere_rel_pos = CgmVec3_sub(sphere->center_pos, aabb_center);
+	CgmVec3 capsule_start = sphere_rel_pos;
+	CgmVec3 capsule_end = CgmVec3_add(sphere_rel_pos, CgmVec3_mul_scalar(sphere_dir, sphere_max_contact_distance));
+
+	// calculate the vector that goes down the capsule from the start to the end
+	CgmVec3 capsule_edge_vector = CgmVec3_sub(capsule_end, capsule_start);
+
+	// compute the face normals of the AABB, because the AABB
+	// is at center, and of course axis aligned, we know that
+	// it's normals are the X, Y and Z axis.
+	CgmVec3 u0 = CgmVec3_init(1.0f, 0.0f, 0.0f);
+	CgmVec3 u1 = CgmVec3_init(0.0f, 1.0f, 0.0f);
+	CgmVec3 u2 = CgmVec3_init(0.0f, 0.0f, 1.0f);
+
+	//
+	// all combinations of the edges from both shapes paired together.
+	// we will use the cross product on these pairs to get the
+	// separation axis
+	CgmVec3 edge_axises[][2] = {
+		{ u0, capsule_edge_vector },
+		{ u1, capsule_edge_vector },
+		{ u2, capsule_edge_vector },
+	};
+
+	//
+	// we need a separation axis to make sure the start and end of the capsule
+	// with the nearest edges of the AABB are separated.
+	CgmVec3 capsule_start_to_closest_aabb_pt_vec =
+		CgmVec3_norm(CgmVec3_sub(capsule_start, CgmVec3_clamp(capsule_start, CgmVec3_neg(aabb_half_size), aabb_half_size)));
+	CgmVec3 capsule_end_to_closest_aabb_pt_vec =
+		CgmVec3_norm(CgmVec3_sub(capsule_end, CgmVec3_clamp(capsule_end, CgmVec3_neg(aabb_half_size), aabb_half_size)));
+
+	//
+	// all of the separation axis that do not need a cross product to work out.
+	CgmVec3 face_axises[] = {
+		u0,
+		u1,
+		u2,
+		capsule_start_to_closest_aabb_pt_vec,
+		capsule_end_to_closest_aabb_pt_vec,
+	};
+
+	CgmVec3 min_axis;
+	float min_axis_distance = INFINITY;
+
+	for (uint32_t i = 0; i < 8; i += 1) {
+		CgmVec3 axis;
+		if (i < 3) {
+			axis = edge_axises[i][0];
+			CgmVec3 separation_axis = CgmVec3_mul_cross(axis, edge_axises[i][1]);
+			float squared_distance = CgmVec3_dot(separation_axis, separation_axis);
+			// if the two axis we just cross product together are parallel, we can skip these.
+			// this is only because the edge axis is also use as a face axis -> u0, u1, u2
+			// and will be tested later.
+			if (cgm_approx_eq(squared_distance, 0.f)) continue;
+			axis = CgmVec3_norm(separation_axis);
+		} else {
+			axis = face_axises[i - 3];
+		}
+
+		// project the capsule start and end onto the axis
+		float p_start = CgmVec3_dot(capsule_start, axis);
+		float p_end = CgmVec3_dot(capsule_end, axis);
+
+		// project the half size of the AABB onto the separating axis
+		// since we are working in relative space from the AABB center.
+		float r = aabb_half_size.x * fabsf(CgmVec3_dot(u0, axis)) +
+					aabb_half_size.y * fabsf(CgmVec3_dot(u1, axis)) +
+					aabb_half_size.z * fabsf(CgmVec3_dot(u2, axis));
+
+		// now do the actual test to see if either of
+		// the most extreme of the capsule ends + their radius intersects r.
+		float max = cgm_max(p_start, p_end) + sphere->radius;
+		float min = cgm_min(p_start, p_end) - sphere->radius;
+		float t = cgm_max(-max, min);
+		if (t > r) {
+			//
+			// here we have found a separation along this axis
+			// so return no collision.
+			//
+			return cgm_false;
+		}
+
+		//
+		// we do not want to store a min travel distance when using an
+		// separation axis that is perpendicular. a perpendicular axis
+		// means that the swept sphere will be projected in the same place every time.
+		if (cgm_approx_eq(CgmVec3_dot(sphere_dir, axis), 0.f))
+			continue;
+
+		//
+		// do not use if the ray is inside the AABB
+		if (fabsf(p_start) < r)
+			continue;
+
+		float distance = fabsf(fabsf(p_start) - r);
+		CgmVec3 separate_vec = CgmVec3_mul_scalar(axis, -distance);
+		float offset_along_sphere_dir = CgmVec3_dot(sphere_dir, separate_vec);
+		if (offset_along_sphere_dir < 0.f)
+			continue;
+
+		if (offset_along_sphere_dir < min_axis_distance) {
+			//
+			// we have found a axis with the new minimum separation needed to separate.
+			// we need to flip the axis if the capsule is in the positive half of the AABB (AABB center is 0 AKA origin).
+			min_axis_distance = distance;
+			min_axis = p_start > 0.f ? CgmVec3_neg(axis) : axis;
+		}
+	}
+
+	//
+	// we have made it this far so we have a collision.
+	if (contact_normal_out) *contact_normal_out = min_axis;
+	if (contact_distance_out) {
+		*contact_distance_out = min_axis_distance;
+	}
+	return cgm_true;
+
 }
 
 CgmBool cgm_3d_aabb_vs_capsule(CgmAabb3d* aabb, CgmCapsule3d* capsule, CgmVec3* contact_normal_out, float* contact_distance_out) {
@@ -1177,6 +1726,91 @@ CgmBool cgm_3d_aabb_vs_mesh(CgmAabb3d* aabb, CgmMesh* mesh, CgmVec3* contact_nor
 	return _cgm_3d_shape_vs_mesh(aabb, mesh, contact_normal_out, contact_distance_out, (CgmBool(*)())cgm_3d_aabb_vs_triangle);
 }
 
+CgmBool cgm_3d_aabb_vs_hoop(CgmAabb3d* aabb, CgmHoop3d* hoop, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmVec3 closest_pt_on_aabb = CgmAabb3d_closest_pt(aabb, hoop->center_pos);
+	CgmVec3 aabb_half_size = CgmAabb3d_half_size(aabb);
+	float max_half_size = cgm_max(cgm_max(aabb_half_size.x, aabb_half_size.y), aabb_half_size.z);
+	if (cgm_3d_aabb_vs_pt(aabb, hoop->center_pos, NULL, NULL) && max_half_size > hoop->inner_radius) {
+		//
+		// the hoop center is inside the AABB and one of the sides is larger than
+		// inner size of the hoop.this mean we have a collision.
+		// if the use does not request any of the contact info,
+		// we can return success early.
+		//
+		if (!contact_distance_out && !contact_normal_out)
+			return cgm_true;
+
+		//
+		// now find the closest distance and normal to bring the hoop out
+		// the shortest amount. we do this by finding the furthest point on
+		// the hoop that is in the AABB. then move out in the opposite direction.
+		CgmVec3 normal;
+		float distance_to_edge;
+		CgmVec3 closest_pt_on_hoop = CgmHoop3d_closest_pt(hoop, CgmAabb3d_center(aabb));
+		CgmVec3 vec_to_closest_pt_on_hoop = CgmVec3_sub(closest_pt_on_hoop, hoop->center_pos);
+
+		if (vec_to_closest_pt_on_hoop.x > vec_to_closest_pt_on_hoop.y && vec_to_closest_pt_on_hoop.x > vec_to_closest_pt_on_hoop.z) {
+			normal = CgmVec3_init(copysignf(1.f, -vec_to_closest_pt_on_hoop.x), 0.f, 0.f);
+			distance_to_edge = aabb_half_size.x - vec_to_closest_pt_on_hoop.x;
+		} else if (vec_to_closest_pt_on_hoop.y > vec_to_closest_pt_on_hoop.x && vec_to_closest_pt_on_hoop.y > vec_to_closest_pt_on_hoop.z) {
+			normal = CgmVec3_init(0.f, copysignf(1.f, -vec_to_closest_pt_on_hoop.y), 0.f);
+			distance_to_edge = aabb_half_size.y - vec_to_closest_pt_on_hoop.y;
+		} else {
+			normal = CgmVec3_init(0.f, 0.f, copysignf(1.f, -vec_to_closest_pt_on_hoop.z));
+			distance_to_edge = aabb_half_size.z - vec_to_closest_pt_on_hoop.z;
+		}
+
+		if (contact_distance_out) *contact_distance_out = hoop->rim_radius + distance_to_edge;
+		if (contact_normal_out) *contact_normal_out = normal;
+		return cgm_true;
+	} else {
+		CgmVec3 closest_pt_on_hoop = CgmHoop3d_closest_pt(hoop, closest_pt_on_aabb);
+		CgmVec3 vec_to_closest_pt_on_hoop = CgmVec3_sub(closest_pt_on_hoop, hoop->center_pos);
+
+		//
+		// see if the AABB is actuall on the inside of the hoop.
+		// if so there will probably be a closer point.
+		CgmVec3 another_closest_pt_on_aabb = CgmAabb3d_clamp_pt(aabb, closest_pt_on_hoop);
+		CgmVec3 closest_pt_on_hoop_to_aabb_vec = CgmVec3_sub(another_closest_pt_on_aabb, closest_pt_on_hoop);
+		if (CgmVec3_dot(closest_pt_on_hoop_to_aabb_vec, vec_to_closest_pt_on_hoop) < 0.f) {
+			//
+			// now check each vertex and see if there is a closer point around the ring
+			CgmVec3 vertices[] = {
+				CgmVec3_init(aabb->x,   aabb->y,  aabb->z),
+				CgmVec3_init(aabb->ex,  aabb->y,  aabb->z),
+				CgmVec3_init(aabb->x,  aabb->ey,  aabb->z),
+				CgmVec3_init(aabb->x,   aabb->y, aabb->ez),
+				CgmVec3_init(aabb->ex, aabb->ey,  aabb->z),
+				CgmVec3_init(aabb->x,  aabb->ey, aabb->ez),
+				CgmVec3_init(aabb->ex,  aabb->y, aabb->ez),
+				CgmVec3_init(aabb->ex, aabb->ey, aabb->ez),
+			};
+
+			float min_distance_squared = CgmVec3_dot(closest_pt_on_hoop_to_aabb_vec, closest_pt_on_hoop_to_aabb_vec);
+;
+			for (uint32_t i = 0; i < 8; i += 1) {
+				CgmVec3 vertex = vertices[i];
+				CgmVec3 vertex_closest_pt_on_hoop = CgmHoop3d_closest_pt(hoop, vertex);
+
+				CgmVec3 vertex_another_closest_pt_on_aabb = CgmAabb3d_clamp_pt(aabb, vertex_closest_pt_on_hoop);
+				CgmVec3 vec_to_aabb_from_closest_pt = CgmVec3_sub(vertex_another_closest_pt_on_aabb, vertex_closest_pt_on_hoop);
+				float len_squared_to_aabb_from_closest_pt = CgmVec3_dot(vec_to_aabb_from_closest_pt, vec_to_aabb_from_closest_pt);
+				if (len_squared_to_aabb_from_closest_pt < min_distance_squared) {
+					min_distance_squared = len_squared_to_aabb_from_closest_pt;
+					closest_pt_on_hoop = vertex_closest_pt_on_hoop;
+				}
+			}
+		}
+
+		//
+		// now we have found the closest point on the hoop to the AABB.
+		// now just do make a sphere using the closest point to test against the AABB.
+		CgmSphere sphere = { .center_pos = closest_pt_on_hoop, .radius = hoop->rim_radius };
+		return cgm_3d_aabb_vs_sphere(aabb, &sphere, contact_normal_out, contact_distance_out);
+	}
+	return cgm_false;
+}
+
 CgmBool cgm_3d_sphere_vs_pt(CgmSphere* sphere, CgmVec3 pt, CgmVec3* contact_normal_out, float* contact_distance_out) {
 	CgmBool res = cgm_3d_pt_vs_sphere(pt, sphere, contact_normal_out, contact_distance_out);
 	if (res) {
@@ -1192,6 +1826,14 @@ CgmBool cgm_3d_sphere_vs_sphere(CgmSphere* a, CgmSphere* b, CgmVec3* contact_nor
 
 CgmBool cgm_3d_sphere_vs_aabb(CgmSphere* sphere, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out) {
 	CgmBool res = cgm_3d_aabb_vs_sphere(aabb, sphere, contact_normal_out, contact_distance_out);
+	if (res) {
+		if (contact_normal_out) *contact_normal_out = CgmVec3_neg(*contact_normal_out);
+	}
+	return res;
+}
+
+CgmBool cgm_3d_swept_sphere_vs_aabb(CgmSphere* sphere, CgmVec3 sphere_dir, float sphere_max_contact_distance, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmBool res = cgm_3d_aabb_vs_swept_sphere(aabb, sphere, sphere_dir, sphere_max_contact_distance, contact_normal_out, contact_distance_out);
 	if (res) {
 		if (contact_normal_out) *contact_normal_out = CgmVec3_neg(*contact_normal_out);
 	}
@@ -1299,6 +1941,17 @@ CgmBool cgm_3d_sphere_vs_double_side_triangle(CgmSphere* sphere, CgmTriangle3d* 
 
 CgmBool cgm_3d_sphere_vs_mesh(CgmSphere* sphere, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out) {
 	return _cgm_3d_shape_vs_mesh(sphere, mesh, contact_normal_out, contact_distance_out, (CgmBool(*)())cgm_3d_sphere_vs_triangle);
+}
+
+CgmBool cgm_3d_sphere_vs_hoop(CgmSphere* sphere, CgmHoop3d* hoop, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmVec3 closest_pt_on_hoop = CgmHoop3d_closest_pt(hoop, sphere->center_pos);
+	CgmVec3 vec_to_closest_pt_on_hoop = CgmVec3_sub(closest_pt_on_hoop, sphere->center_pos);
+
+	//
+	// now we have found the closest point on the hoop to the sphere.
+	// now just do make a sphere using the closest point to test against the sphere.
+	CgmSphere hoop_closest_sphere = { .center_pos = closest_pt_on_hoop, .radius = hoop->rim_radius };
+	return cgm_3d_sphere_vs_sphere(sphere, &hoop_closest_sphere, contact_normal_out, contact_distance_out);
 }
 
 CgmBool cgm_3d_capsule_vs_pt(CgmCapsule3d* capsule, CgmVec3 pt, CgmVec3* contact_normal_out, float* contact_distance_out) {
@@ -1547,7 +2200,7 @@ CgmBool cgm_3d_capsule_vs_triangle(CgmCapsule3d* capsule, CgmTriangle3d* triangl
 		if (distance < min_axis_distance) {
 			//
 			// we have found a axis with the new minimum separation needed to separate.
-			// we need to flip the axis if the triangle is in the positive half of the sphere (sphere center is 0 AKA origin).
+			// we need to flip the axis if the triangle is in the positive side of the capsule.
 			min_axis_distance = distance;
 			min_axis = capsule_min + ((capsule_max - capsule_min) * 0.5f) < triangle_min + ((triangle_max - triangle_min) * 0.5f) ? CgmVec3_neg(axis) : axis;
 		}
@@ -1581,6 +2234,98 @@ CgmBool cgm_3d_capsule_vs_double_side_triangle(CgmCapsule3d* capsule, CgmTriangl
 
 CgmBool cgm_3d_capsule_vs_mesh(CgmCapsule3d* capsule, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out) {
 	return _cgm_3d_shape_vs_mesh(capsule, mesh, contact_normal_out, contact_distance_out, (CgmBool(*)())cgm_3d_capsule_vs_triangle);
+}
+
+CgmBool cgm_3d_capsule_vs_hoop(CgmCapsule3d* capsule, CgmHoop3d* hoop, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	float hoop_center_to_rim_center_offset = hoop->inner_radius + hoop->rim_radius;
+	float hoop_center_offset_p = CgmVec3_dot(CgmVec3_sub(hoop->center_pos, capsule->center_pos), capsule->direction);
+	float up_p = fabsf(CgmVec3_dot(hoop->up, capsule->direction) * hoop_center_to_rim_center_offset);
+	float right_p = fabsf(CgmVec3_dot(hoop->right, capsule->direction) * hoop_center_to_rim_center_offset);
+
+	float offsets[5] = {
+		up_p,
+		right_p,
+		-up_p,
+		-right_p,
+		0.f,
+	};
+
+
+	float min_distance_squared = INFINITY;
+	CgmVec3 closest_pt_on_hoop;
+	CgmVec3 closest_pt_on_capsule;
+	for (int i = 0; i < 5; i += 1) {
+		float pt_p = cgm_clamp(hoop_center_offset_p + offsets[i], -capsule->half_length, capsule->half_length);
+		CgmVec3 pt_on_capsule = CgmVec3_add(capsule->center_pos, CgmVec3_mul_scalar(capsule->direction, pt_p));
+		CgmVec3 pt_on_hoop = CgmHoop3d_closest_pt(hoop, pt_on_capsule);
+		CgmVec3 vec = CgmVec3_sub(pt_on_hoop, pt_on_capsule);
+		float distance_squared = CgmVec3_dot(vec, vec);
+		if (distance_squared < min_distance_squared) {
+			min_distance_squared = distance_squared;
+			closest_pt_on_hoop = pt_on_hoop;
+			closest_pt_on_capsule = pt_on_capsule;
+		}
+	}
+
+	CgmSphere hoop_closest_sphere = { .center_pos = closest_pt_on_hoop, .radius = hoop->rim_radius };
+	if (cgm_3d_pt_vs_sphere(closest_pt_on_capsule, &hoop_closest_sphere, NULL, NULL)) {
+		if (!contact_normal_out && !contact_distance_out)
+			return cgm_true;
+
+		CgmVec3 vec = CgmVec3_sub(closest_pt_on_capsule, closest_pt_on_hoop);
+		float vec_len = CgmVec3_len(vec);
+
+		if (contact_normal_out) *contact_normal_out = CgmVec3_norm(vec);
+		if (contact_distance_out) *contact_distance_out = hoop->rim_radius - vec_len + capsule->radius;
+		return cgm_true;
+	}
+
+	CgmSphere capsule_closest_sphere = { .center_pos = closest_pt_on_capsule, .radius = capsule->radius };
+	if (cgm_3d_sphere_vs_sphere(&capsule_closest_sphere, &hoop_closest_sphere, contact_normal_out, contact_distance_out)) {
+		return cgm_true;
+		/* TODO: if the capsule spans over both ends of the hoop horizontally and vertically (face normal)
+		 * we need to then move the capsule to closest vertical side (face normal)
+
+		if (!contact_normal_out && !contact_distance_out)
+			return cgm_true;
+
+		float hoop_center_to_rim_center_p = up_p + right_p;
+
+		CgmVec3 capsule_offset = CgmVec3_mul_scalar(capsule->direction, capsule->half_length);
+		CgmVec3 capsule_rel_pos = CgmVec3_sub(capsule->center_pos, hoop->center_pos);
+		CgmVec3 capsule_start = CgmVec3_add(capsule_rel_pos, capsule_offset);
+		CgmVec3 capsule_end = CgmVec3_add(capsule_rel_pos, CgmVec3_neg(capsule_offset));
+
+		CgmVec3 max_capsule_span_vec = CgmVec3_mul_scalar(capsule->direction, hoop_center_to_rim_center_p);
+
+		CgmVec3 hoop_face_normal = CgmVec3_norm(CgmVec3_mul_cross(hoop->up, hoop->right));
+
+		float max_capsule_span_p = CgmVec3_dot(max_capsule_span_vec, hoop_face_normal);
+
+		float capsule_p_start = CgmVec3_dot(capped_capsule_start, hoop_face_normal);
+		float capsule_p_end = CgmVec3_dot(capped_capsule_end, hoop_face_normal);
+		float capsule_min = cgm_min(capped_capsule_p_start, capped_capsule_p_end) - capsule->radius;
+		float capsule_max = cgm_max(capped_capsule_p_start, capped_capsule_p_end) + capsule->radius;
+
+		capsule_min +=
+
+
+		capsule_min -= capsule->radius;
+		capsule_max += capsule->radius;
+
+		if (capsule_min < hoop->rim_radius && capsule_max > hoop->rim_radius) {
+			if (capped_capsule_max > -capped_capsule_min) {
+				if (contact_normal_out) *contact_normal_out = hoop_face_normal;
+				if (contact_distance_out) *contact_distance_out = hoop->rim_radius - capped_capsule_min;
+			} else {
+				if (contact_normal_out) *contact_normal_out = CgmVec3_neg(hoop_face_normal);
+				if (contact_distance_out) *contact_distance_out = hoop->rim_radius + capped_capsule_max;
+			}
+		}
+
+		*/
+	}
+	return cgm_false;
 }
 
 CgmBool cgm_3d_triangle_vs_aabb(CgmTriangle3d* triangle, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side) {
@@ -1763,6 +2508,105 @@ CgmBool cgm_3d_triangle_vs_mesh(CgmTriangle3d* triangle, CgmMesh* mesh, CgmVec3*
 	return cgm_true;
 }
 
+CgmBool cgm_3d_triangle_vs_hoop(CgmTriangle3d* triangle, CgmHoop3d* hoop, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side) {
+	// translate triangle into relative space from the hoop center.
+	CgmVec3 rp0 = CgmVec3_sub(triangle->a, hoop->center_pos);
+	CgmVec3 rp1 = CgmVec3_sub(triangle->b, hoop->center_pos);
+	CgmVec3 rp2 = CgmVec3_sub(triangle->c, hoop->center_pos);
+
+	// compute edge vectors for triangle
+	CgmVec3 e0 = CgmVec3_sub(triangle->b, triangle->a);
+	CgmVec3 e1 = CgmVec3_sub(triangle->c, triangle->b);
+	CgmVec3 e2 = CgmVec3_sub(triangle->a, triangle->c);
+
+	CgmVec3 triangle_face_normal = CgmVec3_norm(CgmVec3_mul_cross(e0, e1));
+	CgmVec3 hoop_face_normal = CgmVec3_norm(CgmVec3_mul_cross(hoop->up, hoop->right));
+
+	//
+	// all of the separation axis that do not need a cross product to work out.
+	CgmVec3 face_axises[] = {
+		triangle_face_normal,
+		hoop_face_normal,
+
+		//
+		// these three are essentially computing the closest
+		// vector (the vector that is perpendicular) from each edge
+		// to the hoop. CgmVec3_zero is used as the hoop center
+		// position in relative space.
+		CgmVec3_neg(cgm_line_get_projected_pt(rp0, rp1, CgmVec3_zero)),
+		CgmVec3_neg(cgm_line_get_projected_pt(rp1, rp2, CgmVec3_zero)),
+		CgmVec3_neg(cgm_line_get_projected_pt(rp2, rp0, CgmVec3_zero)),
+	};
+
+	CgmVec3 min_axis;
+	float min_axis_distance = INFINITY;
+
+	CgmVec3 rim_vec = CgmVec3_mul_scalar(hoop_face_normal, hoop->rim_radius * 2.f);
+
+	for (uint32_t i = 0; i < 5; i += 1) {
+		CgmVec3 axis = face_axises[i];
+		float len_sq = CgmVec3_dot(axis, axis);
+		if (len_sq == 0.f) continue;
+		// normalize
+		float k = 1.f / sqrtf(len_sq);
+		axis = CgmVec3_mul_scalar(axis, k);
+
+		// project all 3 vertices of the triangle onto the separation axis
+		float p0 = CgmVec3_dot(rp0, axis);
+		float p1 = CgmVec3_dot(rp1, axis);
+		float p2 = CgmVec3_dot(rp2, axis);
+		float triangle_min = cgm_min(cgm_min(p0, p1), p2);
+		float triangle_max = cgm_max(cgm_max(p0, p1), p2);
+
+		float inner_size = hoop->inner_radius * fabsf(CgmVec3_dot(hoop->up, axis)) +
+			hoop->inner_radius * fabsf(CgmVec3_dot(hoop->right, axis));
+
+		float rim_size = CgmVec3_dot(rim_vec, axis);
+		float rim_start = inner_size;
+		float rim_end = inner_size + rim_size;
+		float rim_min = cgm_min(rim_start, rim_end);
+		float rim_max = cgm_max(rim_start, rim_end);
+
+		//
+		// get smallest distance between the two possible overlapping ends.
+		// the smaller is the possible separation or overlap between the two shapes.
+		// the larger one will be the span of the two shapes across the axis.
+		float distance = cgm_min(rim_max - triangle_min, triangle_max - rim_min);
+		if (distance < 0.f) {
+			//
+			// here we have found a separation along this axis
+			// so return no collision.
+			//
+			return cgm_false;
+		}
+
+		if (distance < min_axis_distance) {
+			//
+			// we have found a axis with the new minimum separation needed to separate.
+			// we need to flip the axis if the triangle is on the side of the rim
+			min_axis_distance = distance;
+			min_axis = triangle_min + ((triangle_max - triangle_min) * 0.5f) < rim_min + ((rim_max - rim_min) * 0.5f) ? CgmVec3_neg(axis) : axis;
+		}
+	}
+
+	//
+	// when using single side triangles, we only want to provide
+	// a collision separation when the minimum separation axis
+	// is the face normal of the triangle
+	if (triangle_single_side) {
+		float d = CgmVec3_dot(min_axis, triangle_face_normal);
+		if (!cgm_approx_eq(d, 1.f)) {
+			return cgm_false;
+		}
+	}
+
+	//
+	// we have made it this far so we have a collision.
+	if (contact_normal_out) *contact_normal_out = min_axis;
+	if (contact_distance_out) *contact_distance_out = min_axis_distance;
+	return cgm_true;
+}
+
 CgmBool cgm_3d_single_side_triangle_vs_aabb(CgmTriangle3d* triangle, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out) {
 	return cgm_3d_triangle_vs_aabb(triangle, aabb, contact_normal_out, contact_distance_out, cgm_true);
 }
@@ -1787,6 +2631,10 @@ CgmBool cgm_3d_single_side_triangle_vs_mesh(CgmTriangle3d* triangle, CgmMesh* me
 	return cgm_3d_triangle_vs_mesh(triangle, mesh, contact_normal_out, contact_distance_out, cgm_true);
 }
 
+CgmBool cgm_3d_single_side_triangle_vs_hoop(CgmTriangle3d* triangle, CgmHoop3d* hoop, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	return cgm_3d_triangle_vs_hoop(triangle, hoop, contact_normal_out, contact_distance_out, cgm_true);
+}
+
 
 CgmBool cgm_3d_double_side_triangle_vs_aabb(CgmTriangle3d* triangle, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out) {
 	return cgm_3d_triangle_vs_aabb(triangle, aabb, contact_normal_out, contact_distance_out, cgm_false);
@@ -1800,12 +2648,20 @@ CgmBool cgm_3d_double_side_triangle_vs_capsule(CgmTriangle3d* triangle, CgmCapsu
 	return cgm_3d_triangle_vs_capsule(triangle, capsule, contact_normal_out, contact_distance_out, cgm_false);
 }
 
-CgmBool cgm_3d_double_side_triangle_vs_triangle(CgmTriangle3d* a, CgmTriangle3d* b, CgmVec3* contact_normal_out, float* contact_distance_out) {
+CgmBool cgm_3d_double_side_triangle_vs_single_side_triangle(CgmTriangle3d* a, CgmTriangle3d* b, CgmVec3* contact_normal_out, float* contact_distance_out) {
 	return cgm_3d_triangle_vs_triangle(a, b, contact_normal_out, contact_distance_out, cgm_false, cgm_true);
+}
+
+CgmBool cgm_3d_double_side_triangle_vs_double_side_triangle(CgmTriangle3d* a, CgmTriangle3d* b, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	return cgm_3d_triangle_vs_triangle(a, b, contact_normal_out, contact_distance_out, cgm_false, cgm_false);
 }
 
 CgmBool cgm_3d_double_side_triangle_vs_mesh(CgmTriangle3d* triangle, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out) {
 	return cgm_3d_triangle_vs_mesh(triangle, mesh, contact_normal_out, contact_distance_out, cgm_false);
+}
+
+CgmBool cgm_3d_double_side_triangle_vs_hoop(CgmTriangle3d* triangle, CgmHoop3d* hoop, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	return cgm_3d_triangle_vs_hoop(triangle, hoop, contact_normal_out, contact_distance_out, cgm_false);
 }
 
 CgmBool cgm_3d_mesh_vs_aabb(CgmMesh* mesh, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out) {
@@ -1840,11 +2696,84 @@ CgmBool cgm_3d_mesh_vs_triangle(CgmMesh* mesh, CgmTriangle3d* triangle, CgmVec3*
 	return res;
 }
 
+CgmBool cgm_3d_mesh_vs_hoop(CgmMesh* mesh, CgmHoop3d* hoop, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmBool res = _cgm_3d_shape_vs_mesh(hoop, mesh, contact_normal_out, contact_distance_out, (CgmBool(*)())cgm_3d_hoop_vs_triangle);
+	if (res) {
+		if (contact_normal_out) *contact_normal_out = CgmVec3_neg(*contact_normal_out);
+	}
+	return res;
+}
+
 CgmBool cgm_3d_mesh_vs_single_side_triangle(CgmMesh* mesh, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out) {
 	return cgm_3d_mesh_vs_triangle(mesh, triangle, contact_normal_out, contact_distance_out, cgm_true);
 }
 
 CgmBool cgm_3d_mesh_vs_double_side_triangle(CgmMesh* mesh, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out) {
 	return cgm_3d_mesh_vs_triangle(mesh, triangle, contact_normal_out, contact_distance_out, cgm_false);
+}
+
+CgmBool cgm_3d_hoop_vs_aabb(CgmHoop3d* hoop, CgmAabb3d* aabb, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmBool res = cgm_3d_aabb_vs_hoop(aabb, hoop, contact_normal_out, contact_distance_out);
+	if (res) {
+		if (contact_normal_out) *contact_normal_out = CgmVec3_neg(*contact_normal_out);
+	}
+	return res;
+}
+
+CgmBool cgm_3d_hoop_vs_sphere(CgmHoop3d* hoop, CgmSphere* sphere, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmBool res = cgm_3d_sphere_vs_hoop(sphere, hoop, contact_normal_out, contact_distance_out);
+	if (res) {
+		if (contact_normal_out) *contact_normal_out = CgmVec3_neg(*contact_normal_out);
+	}
+	return res;
+}
+
+CgmBool cgm_3d_hoop_vs_capsule(CgmHoop3d* hoop, CgmCapsule3d* capsule, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmBool res = cgm_3d_capsule_vs_hoop(capsule, hoop, contact_normal_out, contact_distance_out);
+	if (res) {
+		if (contact_normal_out) *contact_normal_out = CgmVec3_neg(*contact_normal_out);
+	}
+	return res;
+}
+
+CgmBool cgm_3d_hoop_vs_triangle(CgmHoop3d* hoop, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out, CgmBool triangle_single_side) {
+	CgmBool res = cgm_3d_triangle_vs_hoop(triangle, hoop, contact_normal_out, contact_distance_out, triangle_single_side);
+	if (res) {
+		if (contact_normal_out) *contact_normal_out = CgmVec3_neg(*contact_normal_out);
+	}
+	return res;
+}
+
+CgmBool cgm_3d_hoop_vs_single_side_triangle(CgmHoop3d* hoop, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmBool res = cgm_3d_single_side_triangle_vs_hoop(triangle, hoop, contact_normal_out, contact_distance_out);
+	if (res) {
+		if (contact_normal_out) *contact_normal_out = CgmVec3_neg(*contact_normal_out);
+	}
+	return res;
+}
+
+CgmBool cgm_3d_hoop_vs_double_side_triangle(CgmHoop3d* hoop, CgmTriangle3d* triangle, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmBool res = cgm_3d_double_side_triangle_vs_hoop(triangle, hoop, contact_normal_out, contact_distance_out);
+	if (res) {
+		if (contact_normal_out) *contact_normal_out = CgmVec3_neg(*contact_normal_out);
+	}
+	return res;
+}
+
+CgmBool cgm_3d_hoop_vs_mesh(CgmHoop3d* hoop, CgmMesh* mesh, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmBool res = cgm_3d_mesh_vs_hoop(mesh, hoop, contact_normal_out, contact_distance_out);
+	if (res) {
+		if (contact_normal_out) *contact_normal_out = CgmVec3_neg(*contact_normal_out);
+	}
+	return res;
+}
+
+CgmBool cgm_3d_hoop_vs_hoop(CgmHoop3d* a, CgmHoop3d* b, CgmVec3* contact_normal_out, float* contact_distance_out) {
+	CgmVec3 closest_pt_on_a = CgmHoop3d_closest_pt(a, b->center_pos);
+	CgmVec3 closest_pt_on_b = CgmHoop3d_closest_pt(b, a->center_pos);
+
+	CgmSphere a_closest_sphere = { .radius = a->rim_radius, .center_pos = closest_pt_on_a };
+	CgmSphere b_closest_sphere = { .radius = b->rim_radius, .center_pos = closest_pt_on_b };
+	return cgm_3d_sphere_vs_sphere(&a_closest_sphere, &b_closest_sphere, contact_normal_out, contact_distance_out);
 }
 
